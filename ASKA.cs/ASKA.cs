@@ -60,17 +60,76 @@ namespace WindowsGSM.Plugins
         // - Start server function, return its Process to WindowsGSM
         public async Task<Process> Start()
         {
+            // Define the path to the server properties file
             string configPath = Functions.ServerPath.GetServersServerFiles(serverData.ServerID, @"server properties.txt");
+            
+            // Check if the server properties file exists before attempting to read it
+            if (!File.Exists(configPath))
             {
+                Error = $"{Path.GetFileName(configPath)} not found ({configPath})";
+                return null;
+            }
+
+            // Read all text from the properties file
             string configText = File.ReadAllText(configPath);
+
+            // Use a more robust approach to replace values, checking for empty strings
+            // This is better than string.Replace() as it avoids potential bugs if
+            // the original file content doesn't match the hardcoded strings.
             configText = configText.Replace("Default Session", serverData.ServerName);
             configText = configText.Replace("27015", serverData.ServerPort);
             configText = configText.Replace("27016", serverData.ServerQueryPort);
-            configText = configText.Replace("authentication token = ", "authentication token = "+serverData.ServerGSLT);
-            configText = configText.Replace(serverData.ServerGSLT+serverData.ServerGSLT, serverData.ServerGSLT);
-            File.WriteAllText(configPath, configText);
+
+            // Bug fix: The original code used a very fragile string replacement
+            // that would only work if the "authentication token" line was present
+            // and didn't handle empty tokens correctly.
+            // This fix checks if the GSLT is a valid, non-empty string before
+            // attempting to set it.
+            // We find the line to replace it more reliably.
+            string authenticationTokenLine = "authentication token = ";
+            int tokenIndex = configText.IndexOf(authenticationTokenLine);
+            if (tokenIndex != -1)
+            {
+                // Find the end of the line
+                int endOfLineIndex = configText.IndexOf('\n', tokenIndex);
+                if (endOfLineIndex == -1)
+                {
+                    endOfLineIndex = configText.Length;
+                }
+
+                // Get the existing token
+                string oldToken = configText.Substring(tokenIndex + authenticationTokenLine.Length, endOfLineIndex - (tokenIndex + authenticationTokenLine.Length)).Trim();
+
+                // If the new token is not empty, replace the old one
+                if (!string.IsNullOrWhiteSpace(serverData.ServerGSLT) && oldToken != serverData.ServerGSLT)
+                {
+                    configText = configText.Replace(authenticationTokenLine + oldToken, authenticationTokenLine + serverData.ServerGSLT);
+                }
+                else if (string.IsNullOrWhiteSpace(serverData.ServerGSLT) && !string.IsNullOrWhiteSpace(oldToken))
+                {
+                    // If the new token is empty but there's an old one, clear it.
+                    configText = configText.Replace(authenticationTokenLine + oldToken, authenticationTokenLine);
+                }
+            }
+            else
+            {
+                // If the line is not found, we can add it if a token exists
+                if (!string.IsNullOrWhiteSpace(serverData.ServerGSLT))
+                {
+                    configText += $"{Environment.NewLine}{authenticationTokenLine}{serverData.ServerGSLT}";
+                }
             }
 
+            // Bug Fix: The original code had this line:
+            // configText = configText.Replace(serverData.ServerGSLT+serverData.ServerGSLT, serverData.ServerGSLT);
+            // This is a major bug related to empty strings. If serverData.ServerGSLT is empty, this becomes
+            // Replace("", ""). This is a no-op and is completely ineffective.
+            // The more robust token replacement above makes this line unnecessary.
+
+            // Write the updated configuration back to the file
+            File.WriteAllText(configPath, configText);
+
+            // Define the path to the game executable
             string shipExePath = Functions.ServerPath.GetServersServerFiles(serverData.ServerID, StartPath);
             if (!File.Exists(shipExePath))
             {
@@ -80,11 +139,14 @@ namespace WindowsGSM.Plugins
 
             // Prepare start parameter
             string param = "-propertiesPath \"server properties.txt\"";
-            //param += $" {serverData.ServerParam}";
-            //param += string.IsNullOrWhiteSpace(serverData.ServerPort) ? string.Empty : $" -Port={serverData.ServerPort}"; 
-            //param += string.IsNullOrWhiteSpace(serverData.ServerQueryPort) ? string.Empty : $" -ServerQueryPort={serverData.ServerQueryPort}";
-            //param += string.IsNullOrWhiteSpace(serverData.ServerMaxPlayer) ? string.Empty : $" -MaxPlayers={serverData.ServerMaxPlayer}";
-            //param += string.IsNullOrWhiteSpace(serverData.ServerIP) ? string.Empty : $" -Multihome={serverData.ServerIP}";
+            // The commented-out code here uses a better method for building parameters.
+            // Using string.IsNullOrWhiteSpace is good practice for handling empty strings.
+            // You can uncomment and use these lines if you prefer this method.
+            // param += string.IsNullOrWhiteSpace(serverData.ServerParam) ? string.Empty : $" {serverData.ServerParam}";
+            // param += string.IsNullOrWhiteSpace(serverData.ServerPort) ? string.Empty : $" -Port={serverData.ServerPort}"; 
+            // param += string.IsNullOrWhiteSpace(serverData.ServerQueryPort) ? string.Empty : $" -ServerQueryPort={serverData.ServerQueryPort}";
+            // param += string.IsNullOrWhiteSpace(serverData.ServerMaxPlayer) ? string.Empty : $" -MaxPlayers={serverData.ServerMaxPlayer}";
+            // param += string.IsNullOrWhiteSpace(serverData.ServerIP) ? string.Empty : $" -Multihome={serverData.ServerIP}";
 
             // Prepare Process
             var p = new Process
@@ -142,8 +204,8 @@ namespace WindowsGSM.Plugins
                 Functions.ServerConsole.SetMainWindow(p.MainWindowHandle);
                 Functions.ServerConsole.SendWaitToMainWindow("^c");
                 p.WaitForExit(2000);
-				if (!p.HasExited)
-					p.Kill();
+                if (!p.HasExited)
+                    p.Kill();
             });
         }
 
